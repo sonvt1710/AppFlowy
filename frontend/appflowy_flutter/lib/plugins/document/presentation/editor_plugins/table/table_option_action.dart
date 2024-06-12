@@ -127,7 +127,7 @@ class TableColorOptionAction extends PopoverActionCell {
           ...FlowyTint.values.map(
             (e) => FlowyColorOption(
               color: e.color(context),
-              i18n: e.tintName(AppFlowyEditorLocalizations.current),
+              i18n: e.tintName(AppFlowyEditorL10n.current),
               id: e.id,
             ),
           ),
@@ -137,8 +137,7 @@ class TableColorOptionAction extends PopoverActionCell {
           colors: colors,
           selected: selectedColor,
           border: Border.all(
-            color: Theme.of(context).colorScheme.onBackground,
-            width: 1,
+            color: AFThemeExtension.of(context).onBackground,
           ),
           onTap: (option, index) async {
             final backgroundColor =

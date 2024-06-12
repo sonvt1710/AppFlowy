@@ -65,10 +65,11 @@ class LemonadeColorScheme extends FlowyColorScheme {
           topbarBg: _white,
           icon: _lightShader1,
           text: _lightShader1,
+          secondaryText: _lightShader1,
           input: _white,
           hint: _lightShader3,
           primary: _lightDandelionYellow,
-          onPrimary: _white,
+          onPrimary: _lightShader1,
           // hover color in sidebar
           hoverBG1: _lightDandelionYellow,
           // tool bar hover color
@@ -119,6 +120,7 @@ class LemonadeColorScheme extends FlowyColorScheme {
           topbarBg: _darkShader1,
           icon: _darkShader5,
           text: _darkShader5,
+          secondaryText: _darkShader5,
           input: _darkInput,
           hint: _darkShader5,
           primary: _darkMain1,

@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
-use collab_database::fields::Field;
+use async_trait::async_trait;
+use collab_database::fields::{Field, TypeOptionData};
 use collab_database::rows::{new_cell_builder, Cell, Cells, Row, RowDetail};
 use serde::{Deserialize, Serialize};
 
@@ -8,17 +7,14 @@ use flowy_error::FlowyResult;
 
 use crate::entities::{
   FieldType, GroupPB, GroupRowsNotificationPB, InsertedGroupPB, InsertedRowPB, RowMetaPB,
-  URLCellDataPB,
 };
 use crate::services::cell::insert_url_cell;
-use crate::services::field::{URLCellData, URLCellDataParser, URLTypeOption};
+use crate::services::field::{TypeOption, URLCellData, URLCellDataParser, URLTypeOption};
 use crate::services::group::action::GroupCustomize;
-use crate::services::group::configuration::GroupContext;
-use crate::services::group::controller::{
-  BaseGroupController, GroupController, GroupsBuilder, MoveGroupRowContext,
-};
+use crate::services::group::configuration::GroupControllerContext;
+use crate::services::group::controller::BaseGroupController;
 use crate::services::group::{
-  make_no_status_group, move_group_row, GeneratedGroupConfig, GeneratedGroups, Group,
+  make_no_status_group, move_group_row, GeneratedGroups, Group, GroupsBuilder, MoveGroupRowContext,
 };
 
 #[derive(Default, Serialize, Deserialize)]
@@ -27,12 +23,12 @@ pub struct URLGroupConfiguration {
 }
 
 pub type URLGroupController =
-  BaseGroupController<URLGroupConfiguration, URLTypeOption, URLGroupGenerator, URLCellDataParser>;
+  BaseGroupController<URLGroupConfiguration, URLGroupGenerator, URLCellDataParser>;
 
-pub type URLGroupContext = GroupContext<URLGroupConfiguration>;
+pub type URLGroupControllerContext = GroupControllerContext<URLGroupConfiguration>;
 
 impl GroupCustomize for URLGroupController {
-  type CellData = URLCellDataPB;
+  type GroupTypeOption = URLTypeOption;
 
   fn placeholder_cell(&self) -> Option<Cell> {
     Some(
@@ -42,23 +38,27 @@ impl GroupCustomize for URLGroupController {
     )
   }
 
-  fn can_group(&self, content: &str, cell_data: &Self::CellData) -> bool {
-    cell_data.content == content
+  fn can_group(
+    &self,
+    content: &str,
+    cell_data: &<Self::GroupTypeOption as TypeOption>::CellData,
+  ) -> bool {
+    cell_data.data == content
   }
 
   fn create_or_delete_group_when_cell_changed(
     &mut self,
-    row_detail: &RowDetail,
-    _old_cell_data: Option<&Self::CellData>,
-    _cell_data: &Self::CellData,
+    _row_detail: &RowDetail,
+    _old_cell_data: Option<&<Self::GroupTypeOption as TypeOption>::CellProtobufType>,
+    _cell_data: &<Self::GroupTypeOption as TypeOption>::CellProtobufType,
   ) -> FlowyResult<(Option<InsertedGroupPB>, Option<GroupPB>)> {
     // Just return if the group with this url already exists
     let mut inserted_group = None;
-    if self.context.get_group(&_cell_data.url).is_none() {
+    if self.context.get_group(&_cell_data.content).is_none() {
       let cell_data: URLCellData = _cell_data.clone().into();
-      let group = make_group_from_url_cell(&cell_data);
+      let group = Group::new(cell_data.data);
       let mut new_group = self.context.add_new_group(group)?;
-      new_group.group.rows.push(RowMetaPB::from(row_detail));
+      new_group.group.rows.push(RowMetaPB::from(_row_detail));
       inserted_group = Some(new_group);
     }
 
@@ -90,7 +90,7 @@ impl GroupCustomize for URLGroupController {
   fn add_or_remove_row_when_cell_changed(
     &mut self,
     row_detail: &RowDetail,
-    cell_data: &Self::CellData,
+    cell_data: &<Self::GroupTypeOption as TypeOption>::CellProtobufType,
   ) -> Vec<GroupRowsNotificationPB> {
     let mut changesets = vec![];
     self.context.iter_mut_status_groups(|group| {
@@ -116,7 +116,11 @@ impl GroupCustomize for URLGroupController {
     changesets
   }
 
-  fn delete_row(&mut self, row: &Row, _cell_data: &Self::CellData) -> Vec<GroupRowsNotificationPB> {
+  fn delete_row(
+    &mut self,
+    row: &Row,
+    cell_data: &<Self::GroupTypeOption as TypeOption>::CellData,
+  ) -> (Option<GroupPB>, Vec<GroupRowsNotificationPB>) {
     let mut changesets = vec![];
     self.context.iter_mut_groups(|group| {
       let mut changeset = GroupRowsNotificationPB::new(group.id.clone());
@@ -129,14 +133,21 @@ impl GroupCustomize for URLGroupController {
         changesets.push(changeset);
       }
     });
-    changesets
+
+    let deleted_group = match self.context.get_group(&cell_data.data) {
+      Some((_, group)) if group.rows.len() == 1 => Some(group.clone()),
+      _ => None,
+    };
+
+    let deleted_group = deleted_group.map(|group| {
+      let _ = self.context.delete_group(&group.id);
+      group.into()
+    });
+
+    (deleted_group, changesets)
   }
 
-  fn move_row(
-    &mut self,
-    _cell_data: &Self::CellData,
-    mut context: MoveGroupRowContext,
-  ) -> Vec<GroupRowsNotificationPB> {
+  fn move_row(&mut self, mut context: MoveGroupRowContext) -> Vec<GroupRowsNotificationPB> {
     let mut group_changeset = vec![];
     self.context.iter_mut_groups(|group| {
       if let Some(changeset) = move_group_row(group, &mut context) {
@@ -149,27 +160,26 @@ impl GroupCustomize for URLGroupController {
   fn delete_group_when_move_row(
     &mut self,
     _row: &Row,
-    _cell_data: &Self::CellData,
+    cell_data: &<Self::GroupTypeOption as TypeOption>::CellProtobufType,
   ) -> Option<GroupPB> {
     let mut deleted_group = None;
-    if let Some((_, group)) = self.context.get_group(&_cell_data.content) {
+    if let Some((_index, group)) = self.context.get_group(&cell_data.content) {
       if group.rows.len() == 1 {
         deleted_group = Some(GroupPB::from(group.clone()));
       }
     }
-    if deleted_group.is_some() {
-      let _ = self
-        .context
-        .delete_group(&deleted_group.as_ref().unwrap().group_id);
+    if let Some(deleted_group) = deleted_group.as_ref() {
+      let _ = self.context.delete_group(&deleted_group.group_id);
     }
     deleted_group
   }
-}
 
-impl GroupController for URLGroupController {
-  fn did_update_field_type_option(&mut self, _field: &Arc<Field>) {}
+  fn delete_group(&mut self, group_id: &str) -> FlowyResult<Option<TypeOptionData>> {
+    self.context.delete_group(group_id)?;
+    Ok(None)
+  }
 
-  fn will_create_row(&mut self, cells: &mut Cells, field: &Field, group_id: &str) {
+  fn will_create_row(&self, cells: &mut Cells, field: &Field, group_id: &str) {
     match self.context.get_group(group_id) {
       None => tracing::warn!("Can not find the group: {}", group_id),
       Some((_, group)) => {
@@ -178,48 +188,35 @@ impl GroupController for URLGroupController {
       },
     }
   }
-
-  fn did_create_row(&mut self, row_detail: &RowDetail, group_id: &str) {
-    if let Some(group) = self.context.get_mut_group(group_id) {
-      group.add_row(row_detail.clone())
-    }
-  }
 }
 
 pub struct URLGroupGenerator();
+#[async_trait]
 impl GroupsBuilder for URLGroupGenerator {
-  type Context = URLGroupContext;
-  type TypeOptionType = URLTypeOption;
+  type Context = URLGroupControllerContext;
+  type GroupTypeOption = URLTypeOption;
 
-  fn build(
+  async fn build(
     field: &Field,
     context: &Self::Context,
-    _type_option: &Option<Self::TypeOptionType>,
+    _type_option: &Self::GroupTypeOption,
   ) -> GeneratedGroups {
     // Read all the cells for the grouping field
-    let cells = futures::executor::block_on(context.get_all_cells());
+    let cells = context.get_all_cells().await;
 
     // Generate the groups
-    let group_configs = cells
+    let groups = cells
       .into_iter()
       .flat_map(|value| value.into_url_field_cell_data())
       .filter(|cell| !cell.data.is_empty())
-      .map(|cell| GeneratedGroupConfig {
-        group: make_group_from_url_cell(&cell),
-        filter_content: cell.data,
-      })
+      .map(|cell| Group::new(cell.data.clone()))
       .collect();
 
     let no_status_group = Some(make_no_status_group(field));
+
     GeneratedGroups {
       no_status_group,
-      group_configs,
+      groups,
     }
   }
-}
-
-fn make_group_from_url_cell(cell: &URLCellData) -> Group {
-  let group_id = cell.data.clone();
-  let group_name = cell.data.clone();
-  Group::new(group_id, group_name)
 }

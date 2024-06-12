@@ -13,7 +13,10 @@
             "type": "dart",
             "env": {
                 "RUST_LOG": "debug",
+                "RUST_BACKTRACE": "1"
             },
+            // uncomment the following line to testing performance.
+            // "flutterMode": "profile",
             "cwd": "${workspaceRoot}/appflowy_flutter"
         },
         {
@@ -25,7 +28,7 @@
             "preLaunchTask": "AF: Build Appflowy Core",
             "env": {
                 "RUST_LOG": "trace",
-                "RUST_BACKTRACE": 1
+                "RUST_BACKTRACE": "1"
             },
             "cwd": "${workspaceRoot}/appflowy_flutter"
         },
@@ -45,11 +48,33 @@
             "cwd": "${workspaceRoot}/appflowy_flutter"
         },
         {
+            "name": "AF-iOS: Build All",
+            "request": "launch",
+            "program": "./lib/main.dart",
+            "type": "dart",
+            "preLaunchTask": "AF: Build Appflowy Core For iOS",
+            "env": {
+                "RUST_LOG": "trace"
+            },
+            "cwd": "${workspaceRoot}/appflowy_flutter"
+        },
+        {
             "name": "AF-iOS: Clean + Rebuild All",
             "request": "launch",
             "program": "./lib/main.dart",
             "type": "dart",
             "preLaunchTask": "AF: Clean + Rebuild All (iOS)",
+            "env": {
+                "RUST_LOG": "trace"
+            },
+            "cwd": "${workspaceRoot}/appflowy_flutter"
+        },
+        {
+            "name": "AF-iOS-Simulator: Build All",
+            "request": "launch",
+            "program": "./lib/main.dart",
+            "type": "dart",
+            "preLaunchTask": "AF: Build Appflowy Core For iOS Simulator",
             "env": {
                 "RUST_LOG": "trace"
             },
@@ -67,11 +92,22 @@
             "cwd": "${workspaceRoot}/appflowy_flutter"
         },
         {
-            "name": "AF-Android-Simlator: Clean + Rebuild All",
+            "name": "AF-Android: Build All",
             "request": "launch",
             "program": "./lib/main.dart",
             "type": "dart",
-            "preLaunchTask": "AF: Clean + Rebuild All (Android Simulator)",
+            "preLaunchTask": "AF: Build Appflowy Core For Android",
+            "env": {
+                "RUST_LOG": "trace"
+            },
+            "cwd": "${workspaceRoot}/appflowy_flutter"
+        },
+        {
+            "name": "AF-Android: Clean + Rebuild All",
+            "request": "launch",
+            "program": "./lib/main.dart",
+            "type": "dart",
+            "preLaunchTask": "AF: Clean + Rebuild All (Android)",
             "env": {
                 "RUST_LOG": "trace"
             },
@@ -79,9 +115,12 @@
         },
         {
             "name": "AF-desktop: Debug Rust",
-            "request": "attach",
             "type": "lldb",
+            "request": "attach",
             "pid": "${command:pickMyProcess}"
+            // To launch the application directly, use the following configuration:
+            // "request": "launch",
+            // "program": "[YOUR_APPLICATION_PATH]",
         },
         {
             // https://tauri.app/v1/guides/debugging/vs-code

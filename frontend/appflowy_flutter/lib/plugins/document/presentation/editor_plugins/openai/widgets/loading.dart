@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 class Loading {
   Loading(this.context);
 
-  late BuildContext loadingContext;
+  BuildContext? loadingContext;
   final BuildContext context;
 
-  Future<void> start() async => await showDialog<void>(
+  Future<void> start() async => showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (BuildContext context) {
@@ -18,13 +18,18 @@ class Loading {
             children: [
               Center(
                 child: CircularProgressIndicator(),
-              )
+              ),
             ],
           );
         },
       );
 
-  Future<void> stop() async => Navigator.of(loadingContext).pop();
+  Future<void> stop() async {
+    if (loadingContext != null) {
+      Navigator.of(loadingContext!).pop();
+      loadingContext = null;
+    }
+  }
 }
 
 class BarrierDialog {
@@ -33,13 +38,13 @@ class BarrierDialog {
   late BuildContext loadingContext;
   final BuildContext context;
 
-  Future<void> show() async => await showDialog<void>(
+  Future<void> show() async => showDialog<void>(
         context: context,
         barrierDismissible: false,
         barrierColor: Colors.transparent,
         builder: (BuildContext context) {
           loadingContext = context;
-          return Container();
+          return const SizedBox.shrink();
         },
       );
 

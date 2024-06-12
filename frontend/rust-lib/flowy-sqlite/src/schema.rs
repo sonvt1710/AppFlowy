@@ -1,6 +1,26 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    chat_message_table (message_id) {
+        message_id -> BigInt,
+        chat_id -> Text,
+        content -> Text,
+        created_at -> BigInt,
+        author_type -> BigInt,
+        author_id -> Text,
+        reply_message_id -> Nullable<BigInt>,
+    }
+}
+
+diesel::table! {
+    chat_table (chat_id) {
+        chat_id -> Text,
+        created_at -> BigInt,
+        name -> Text,
+    }
+}
+
+diesel::table! {
     collab_snapshot (id) {
         id -> Text,
         object_id -> Text,
@@ -32,6 +52,7 @@ diesel::table! {
         auth_type -> Integer,
         encryption_type -> Text,
         stability_ai_key -> Text,
+        updated_at -> BigInt,
     }
 }
 
@@ -42,10 +63,13 @@ diesel::table! {
         uid -> BigInt,
         created_at -> BigInt,
         database_storage_id -> Text,
+        icon -> Text,
     }
 }
 
 diesel::allow_tables_to_appear_in_same_query!(
+  chat_message_table,
+  chat_table,
   collab_snapshot,
   user_data_migration_records,
   user_table,

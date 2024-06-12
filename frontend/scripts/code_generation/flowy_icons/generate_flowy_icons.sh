@@ -14,6 +14,7 @@ rm -rf assets/flowy_icons/
 mkdir -p assets/flowy_icons/
 rsync -r ../resources/flowy_icons/ assets/flowy_icons/
 
+flutter pub get
 flutter packages pub get
 
 echo "Generating FlowySvg classes"

@@ -1,6 +1,7 @@
+import 'dart:io';
+
 import 'package:flowy_infra/size.dart';
 import 'package:flowy_infra_ui/style_widget/hover.dart';
-import 'package:flowy_infra_ui/style_widget/text.dart';
 import 'package:flowy_infra_ui/widget/flowy_tooltip.dart';
 import 'package:flowy_infra_ui/widget/ignore_parent_gesture.dart';
 import 'package:flowy_infra_ui/widget/spacing.dart';
@@ -22,9 +23,14 @@ class FlowyButton extends StatelessWidget {
   final bool disable;
   final double disableOpacity;
   final Size? leftIconSize;
+  final bool expandText;
+  final MainAxisAlignment mainAxisAlignment;
+  final bool showDefaultBoxDecorationOnMobile;
+  final double iconPadding;
+  final bool expand;
 
   const FlowyButton({
-    Key? key,
+    super.key,
     required this.text,
     this.onTap,
     this.onSecondaryTap,
@@ -40,13 +46,27 @@ class FlowyButton extends StatelessWidget {
     this.disable = false,
     this.disableOpacity = 0.5,
     this.leftIconSize = const Size.square(16),
-  }) : super(key: key);
+    this.expandText = true,
+    this.mainAxisAlignment = MainAxisAlignment.center,
+    this.showDefaultBoxDecorationOnMobile = false,
+    this.iconPadding = 6,
+    this.expand = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final color = hoverColor ?? Theme.of(context).colorScheme.secondary;
     final alpha = (255 * disableOpacity).toInt();
     color.withAlpha(alpha);
+
+    if (Platform.isIOS || Platform.isAndroid) {
+      return InkWell(
+        onTap: disable ? null : onTap,
+        onSecondaryTap: disable ? null : onSecondaryTap,
+        borderRadius: radius ?? Corners.s6Border,
+        child: _render(context),
+      );
+    }
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -61,13 +81,13 @@ class FlowyButton extends StatelessWidget {
         ),
         onHover: disable ? null : onHover,
         isSelected: () => isSelected,
-        builder: (context, onHover) => _render(),
+        builder: (context, onHover) => _render(context),
       ),
     );
   }
 
-  Widget _render() {
-    List<Widget> children = List.empty(growable: true);
+  Widget _render(BuildContext context) {
+    final List<Widget> children = [];
 
     if (leftIcon != null) {
       children.add(
@@ -76,26 +96,41 @@ class FlowyButton extends StatelessWidget {
           child: leftIcon!,
         ),
       );
-      children.add(const HSpace(6));
+      children.add(HSpace(iconPadding));
     }
 
-    children.add(Expanded(child: text));
+    if (expandText) {
+      children.add(Expanded(child: text));
+    } else {
+      children.add(text);
+    }
 
     if (rightIcon != null) {
-      children.add(const HSpace(6));
+      children.add(HSpace(iconPadding));
       // No need to define the size of rightIcon. Just use its intrinsic width
       children.add(rightIcon!);
     }
 
     Widget child = Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisAlignment: mainAxisAlignment,
       crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
       children: children,
     );
 
     if (useIntrinsicWidth) {
       child = IntrinsicWidth(child: child);
     }
+
+    final decoration = this.decoration ??
+        (showDefaultBoxDecorationOnMobile &&
+                (Platform.isIOS || Platform.isAndroid)
+            ? BoxDecoration(
+                border: Border.all(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                width: 1.0,
+              ))
+            : null);
 
     return Container(
       decoration: decoration,
@@ -109,9 +144,32 @@ class FlowyButton extends StatelessWidget {
 }
 
 class FlowyTextButton extends StatelessWidget {
+  const FlowyTextButton(
+    this.text, {
+    super.key,
+    this.onPressed,
+    this.fontSize,
+    this.fontColor,
+    this.fontHoverColor,
+    this.overflow = TextOverflow.ellipsis,
+    this.fontWeight,
+    this.padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    this.hoverColor,
+    this.fillColor,
+    this.heading,
+    this.radius,
+    this.mainAxisAlignment = MainAxisAlignment.start,
+    this.tooltip,
+    this.constraints = const BoxConstraints(minWidth: 0.0, minHeight: 0.0),
+    this.decoration,
+    this.fontFamily,
+    this.isDangerous = false,
+  });
+
   final String text;
   final FontWeight? fontWeight;
   final Color? fontColor;
+  final Color? fontHoverColor;
   final double? fontSize;
   final TextOverflow overflow;
 
@@ -128,47 +186,16 @@ class FlowyTextButton extends StatelessWidget {
   final TextDecoration? decoration;
 
   final String? fontFamily;
-
-  // final HoverDisplayConfig? hoverDisplay;
-  const FlowyTextButton(
-    this.text, {
-    Key? key,
-    this.onPressed,
-    this.fontSize,
-    this.fontColor,
-    this.overflow = TextOverflow.ellipsis,
-    this.fontWeight,
-    this.padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-    this.hoverColor,
-    this.fillColor,
-    this.heading,
-    this.radius,
-    this.mainAxisAlignment = MainAxisAlignment.start,
-    this.tooltip,
-    this.constraints = const BoxConstraints(minWidth: 0.0, minHeight: 0.0),
-    this.decoration,
-    this.fontFamily,
-  }) : super(key: key);
+  final bool isDangerous;
 
   @override
   Widget build(BuildContext context) {
     List<Widget> children = [];
     if (heading != null) {
       children.add(heading!);
-      children.add(const HSpace(6));
+      children.add(const HSpace(8));
     }
-    children.add(
-      FlowyText(
-        text,
-        overflow: overflow,
-        fontWeight: fontWeight,
-        fontSize: fontSize,
-        color: fontColor,
-        textAlign: TextAlign.center,
-        decoration: decoration,
-        fontFamily: fontFamily,
-      ),
-    );
+    children.add(Text(text, overflow: overflow, textAlign: TextAlign.center));
 
     Widget child = Row(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -176,29 +203,71 @@ class FlowyTextButton extends StatelessWidget {
       children: children,
     );
 
-    child = RawMaterialButton(
-      hoverElevation: 0,
-      highlightElevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: radius ?? Corners.s6Border),
-      fillColor: fillColor ?? Theme.of(context).colorScheme.secondaryContainer,
-      hoverColor:
-          hoverColor ?? Theme.of(context).colorScheme.secondaryContainer,
-      focusColor: Colors.transparent,
-      splashColor: Colors.transparent,
-      highlightColor: Colors.transparent,
-      elevation: 0,
+    child = ConstrainedBox(
       constraints: constraints,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      padding: padding,
-      onPressed: onPressed,
-      child: child,
+      child: TextButton(
+        onPressed: onPressed ?? () {},
+        focusNode: FocusNode(skipTraversal: onPressed == null),
+        style: ButtonStyle(
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          splashFactory: NoSplash.splashFactory,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          padding: WidgetStateProperty.all(padding),
+          elevation: WidgetStateProperty.all(0),
+          shape: WidgetStateProperty.all(
+            RoundedRectangleBorder(
+              side: BorderSide(
+                color: isDangerous
+                    ? Theme.of(context).colorScheme.error
+                    : Colors.transparent,
+              ),
+              borderRadius: radius ?? Corners.s6Border,
+            ),
+          ),
+          textStyle: WidgetStateProperty.all(
+            TextStyle(
+              fontWeight: fontWeight ?? FontWeight.w500,
+              fontSize: fontSize,
+              decoration: decoration,
+              fontFamily: fontFamily,
+            ),
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            (states) {
+              if (states.contains(WidgetState.hovered)) {
+                return hoverColor ??
+                    (isDangerous
+                        ? Theme.of(context).colorScheme.error
+                        : Theme.of(context).colorScheme.secondary);
+              }
+
+              return fillColor ??
+                  (isDangerous
+                      ? Colors.transparent
+                      : Theme.of(context).colorScheme.secondaryContainer);
+            },
+          ),
+          foregroundColor: WidgetStateProperty.resolveWith(
+            (states) {
+              if (states.contains(WidgetState.hovered)) {
+                return fontHoverColor ??
+                    (fontColor ?? Theme.of(context).colorScheme.onSurface);
+              }
+
+              return fontColor ?? Theme.of(context).colorScheme.onSurface;
+            },
+          ),
+        ),
+        child: child,
+      ),
     );
 
     if (tooltip != null) {
-      child = FlowyTooltip(
-        message: tooltip!,
-        child: child,
-      );
+      child = FlowyTooltip(message: tooltip!, child: child);
+    }
+
+    if (onPressed == null) {
+      child = ExcludeFocus(child: child);
     }
 
     return child;
@@ -206,6 +275,22 @@ class FlowyTextButton extends StatelessWidget {
 }
 
 class FlowyRichTextButton extends StatelessWidget {
+  const FlowyRichTextButton(
+    this.text, {
+    super.key,
+    this.onPressed,
+    this.overflow = TextOverflow.ellipsis,
+    this.padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    this.hoverColor,
+    this.fillColor,
+    this.heading,
+    this.radius,
+    this.mainAxisAlignment = MainAxisAlignment.start,
+    this.tooltip,
+    this.constraints = const BoxConstraints(minWidth: 58.0, minHeight: 30.0),
+    this.decoration,
+  });
+
   final InlineSpan text;
   final TextOverflow overflow;
 
@@ -221,23 +306,6 @@ class FlowyRichTextButton extends StatelessWidget {
 
   final TextDecoration? decoration;
 
-  // final HoverDisplayConfig? hoverDisplay;
-  const FlowyRichTextButton(
-    this.text, {
-    Key? key,
-    this.onPressed,
-    this.overflow = TextOverflow.ellipsis,
-    this.padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-    this.hoverColor,
-    this.fillColor,
-    this.heading,
-    this.radius,
-    this.mainAxisAlignment = MainAxisAlignment.start,
-    this.tooltip,
-    this.constraints = const BoxConstraints(minWidth: 58.0, minHeight: 30.0),
-    this.decoration,
-  }) : super(key: key);
-
   @override
   Widget build(BuildContext context) {
     List<Widget> children = [];
@@ -246,11 +314,7 @@ class FlowyRichTextButton extends StatelessWidget {
       children.add(const HSpace(6));
     }
     children.add(
-      RichText(
-        text: text,
-        overflow: overflow,
-        textAlign: TextAlign.center,
-      ),
+      RichText(text: text, overflow: overflow, textAlign: TextAlign.center),
     );
 
     Widget child = Padding(
@@ -278,16 +342,10 @@ class FlowyRichTextButton extends StatelessWidget {
       child: child,
     );
 
-    child = IgnoreParentGestureWidget(
-      onPress: onPressed,
-      child: child,
-    );
+    child = IgnoreParentGestureWidget(onPress: onPressed, child: child);
 
     if (tooltip != null) {
-      child = FlowyTooltip(
-        message: tooltip!,
-        child: child,
-      );
+      child = FlowyTooltip(message: tooltip!, child: child);
     }
 
     return child;

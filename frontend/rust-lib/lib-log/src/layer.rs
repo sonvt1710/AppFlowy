@@ -1,10 +1,12 @@
+use chrono::Local;
 use std::{fmt, io::Write};
 
 use serde::ser::{SerializeMap, Serializer};
 use serde_json::Value;
 use tracing::{Event, Id, Subscriber};
 use tracing_bunyan_formatter::JsonStorage;
-use tracing_core::{metadata::Level, span::Attributes};
+use tracing_core::metadata::Level;
+use tracing_core::span::Attributes;
 use tracing_subscriber::{fmt::MakeWriter, layer::Context, registry::SpanRef, Layer};
 
 const LEVEL: &str = "level";
@@ -17,17 +19,22 @@ const LOG_TARGET_PATH: &str = "log.target";
 const RESERVED_FIELDS: [&str; 3] = [LEVEL, TIME, MESSAGE];
 const IGNORE_FIELDS: [&str; 2] = [LOG_MODULE_PATH, LOG_TARGET_PATH];
 
-pub struct FlowyFormattingLayer<W: MakeWriter + 'static> {
+pub struct FlowyFormattingLayer<'a, W: MakeWriter<'static> + 'static> {
   make_writer: W,
   with_target: bool,
+  phantom: std::marker::PhantomData<&'a ()>,
 }
 
-impl<W: MakeWriter + 'static> FlowyFormattingLayer<W> {
+impl<'a, W> FlowyFormattingLayer<'a, W>
+where
+  W: for<'writer> MakeWriter<'writer> + 'static,
+{
   #[allow(dead_code)]
   pub fn new(make_writer: W) -> Self {
     Self {
       make_writer,
-      with_target: false,
+      with_target: true,
+      phantom: std::marker::PhantomData,
     }
   }
 
@@ -39,13 +46,13 @@ impl<W: MakeWriter + 'static> FlowyFormattingLayer<W> {
   ) -> Result<(), std::io::Error> {
     map_serializer.serialize_entry(MESSAGE, &message)?;
     // map_serializer.serialize_entry(LEVEL, &format!("{}", level))?;
-    // map_serializer.serialize_entry(TIME, &chrono::Utc::now().timestamp())?;
+    map_serializer.serialize_entry(TIME, &Local::now().format("%m-%d %H:%M:%S").to_string())?;
     Ok(())
   }
 
-  fn serialize_span<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>>(
+  fn serialize_span<S: Subscriber + for<'b> tracing_subscriber::registry::LookupSpan<'b>>(
     &self,
-    span: &SpanRef<S>,
+    span: &SpanRef<'a, S>,
     ty: Type,
     ctx: &Context<'_, S>,
   ) -> Result<Vec<u8>, std::io::Error> {
@@ -58,8 +65,8 @@ impl<W: MakeWriter + 'static> FlowyFormattingLayer<W> {
       map_serializer.serialize_entry("target", &span.metadata().target())?;
     }
 
-    map_serializer.serialize_entry("line", &span.metadata().line())?;
-    map_serializer.serialize_entry("file", &span.metadata().file())?;
+    // map_serializer.serialize_entry("line", &span.metadata().line())?;
+    // map_serializer.serialize_entry("file", &span.metadata().file())?;
 
     let extensions = span.extensions();
     if let Some(visitor) = extensions.get::<JsonStorage>() {
@@ -86,6 +93,7 @@ impl<W: MakeWriter + 'static> FlowyFormattingLayer<W> {
 
 /// The type of record we are dealing with: entering a span, exiting a span, an
 /// event.
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Type {
   EnterSpan,
@@ -96,30 +104,23 @@ pub enum Type {
 impl fmt::Display for Type {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let repr = match self {
-      Type::EnterSpan => "Start",
-      Type::ExitSpan => "End",
-      Type::Event => "Event",
+      Type::EnterSpan => "START",
+      Type::ExitSpan => "END",
+      Type::Event => "EVENT",
     };
     write!(f, "{}", repr)
   }
 }
 
-fn format_span_context<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>>(
-  span: &SpanRef<S>,
+fn format_span_context<'b, S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>>(
+  span: &SpanRef<'b, S>,
   ty: Type,
-  context: &Context<'_, S>,
+  _: &Context<'_, S>,
 ) -> String {
-  match context.lookup_current() {
-    None => {
-      if matches!(ty, Type::EnterSpan) {
-        format!("[🟢 {} - {}]", span.metadata().name().to_uppercase(), ty)
-      } else {
-        format!("[🔵 {} - {}]", span.metadata().name().to_uppercase(), ty)
-      }
-    },
-    Some(_) => {
-      format!("[{} - {}]", span.metadata().name().to_uppercase(), ty)
-    },
+  if matches!(ty, Type::EnterSpan) {
+    format!("[🟢 {} - {}]", span.metadata().name().to_uppercase(), ty)
+  } else {
+    format!("[{} - {}]", span.metadata().name().to_uppercase(), ty)
   }
 }
 
@@ -153,10 +154,10 @@ fn format_event_message<S: Subscriber + for<'a> tracing_subscriber::registry::Lo
   message
 }
 
-impl<S, W> Layer<S> for FlowyFormattingLayer<W>
+impl<S, W> Layer<S> for FlowyFormattingLayer<'static, W>
 where
   S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-  W: MakeWriter + 'static,
+  W: for<'writer> MakeWriter<'writer> + 'static,
 {
   fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
     // Events do not necessarily happen in the context of a span, hence
@@ -221,7 +222,7 @@ where
     }
   }
 
-  fn new_span(&self, _attrs: &Attributes, id: &Id, ctx: Context<'_, S>) {
+  fn on_new_span(&self, _attrs: &Attributes, id: &Id, ctx: Context<'_, S>) {
     let span = ctx.span(id).expect("Span not found, this is a bug");
     if let Ok(serialized) = self.serialize_span(&span, Type::EnterSpan, &ctx) {
       let _ = self.emit(serialized);
