@@ -1,13 +1,12 @@
+use crate::chat_manager::ChatUserService;
+use crate::chat_service_impl::ChatService;
 use crate::entities::{
   ChatMessageErrorPB, ChatMessageListPB, ChatMessagePB, RepeatedRelatedQuestionPB,
 };
-use crate::manager::ChatUserService;
 use crate::notification::{send_notification, ChatNotification};
 use crate::persistence::{insert_chat_messages, select_chat_messages, ChatMessageTable};
 use allo_isolate::Isolate;
-use flowy_chat_pub::cloud::{
-  ChatCloudService, ChatMessage, ChatMessageType, MessageCursor, StringOrMessage,
-};
+use flowy_chat_pub::cloud::{ChatCloudService, ChatMessage, ChatMessageType, MessageCursor};
 use flowy_error::{FlowyError, FlowyResult};
 use flowy_sqlite::DBConnection;
 use futures::{SinkExt, StreamExt};
@@ -27,7 +26,7 @@ pub struct Chat {
   chat_id: String,
   uid: i64,
   user_service: Arc<dyn ChatUserService>,
-  cloud_service: Arc<dyn ChatCloudService>,
+  chat_service: Arc<ChatService>,
   prev_message_state: Arc<RwLock<PrevMessageState>>,
   latest_message_id: Arc<AtomicI64>,
   stop_stream: Arc<AtomicBool>,
@@ -39,12 +38,12 @@ impl Chat {
     uid: i64,
     chat_id: String,
     user_service: Arc<dyn ChatUserService>,
-    cloud_service: Arc<dyn ChatCloudService>,
+    chat_service: Arc<ChatService>,
   ) -> Chat {
     Chat {
       uid,
       chat_id,
-      cloud_service,
+      chat_service,
       user_service,
       prev_message_state: Arc::new(RwLock::new(PrevMessageState::HasMore)),
       latest_message_id: Default::default(),
@@ -94,8 +93,8 @@ impl Chat {
     let workspace_id = self.user_service.workspace_id()?;
 
     let question = self
-      .cloud_service
-      .send_question(&workspace_id, &self.chat_id, message, message_type)
+      .chat_service
+      .save_question(&workspace_id, &self.chat_id, message, message_type)
       .await
       .map_err(|err| {
         error!("Failed to send question: {}", err);
@@ -111,41 +110,25 @@ impl Chat {
     let stop_stream = self.stop_stream.clone();
     let chat_id = self.chat_id.clone();
     let question_id = question.message_id;
-    let cloud_service = self.cloud_service.clone();
+    let cloud_service = self.chat_service.clone();
     let user_service = self.user_service.clone();
     tokio::spawn(async move {
       let mut text_sink = IsolateSink::new(Isolate::new(text_stream_port));
       match cloud_service
-        .stream_answer(&workspace_id, &chat_id, question_id)
+        .ask_question(&workspace_id, &chat_id, question_id)
         .await
       {
         Ok(mut stream) => {
           while let Some(message) = stream.next().await {
             match message {
-              Ok(message) => match message {
-                StringOrMessage::Left(s) => {
-                  if stop_stream.load(std::sync::atomic::Ordering::Relaxed) {
-                    send_notification(&chat_id, ChatNotification::FinishStreaming).send();
-                    trace!("[Chat] stop streaming message");
-                    let answer = cloud_service
-                      .save_answer(
-                        &workspace_id,
-                        &chat_id,
-                        &stream_buffer.lock().await,
-                        question_id,
-                      )
-                      .await?;
-                    Self::save_answer(uid, &chat_id, &user_service, answer)?;
-                    break;
-                  }
-                  stream_buffer.lock().await.push_str(&s);
-                  let _ = text_sink.send(format!("data:{}", s)).await;
-                },
-                StringOrMessage::Right(answer) => {
-                  trace!("[Chat] received final answer: {:?}", answer);
-                  send_notification(&chat_id, ChatNotification::FinishStreaming).send();
-                  Self::save_answer(uid, &chat_id, &user_service, answer)?;
-                },
+              Ok(message) => {
+                if stop_stream.load(std::sync::atomic::Ordering::Relaxed) {
+                  trace!("[Chat] stop streaming message");
+                  break;
+                }
+                let s = String::from_utf8(message.to_vec()).unwrap_or_default();
+                stream_buffer.lock().await.push_str(&s);
+                let _ = text_sink.send(format!("data:{}", s)).await;
               },
               Err(err) => {
                 error!("[Chat] failed to stream answer: {}", err);
@@ -172,6 +155,18 @@ impl Chat {
             .send();
         },
       }
+
+      send_notification(&chat_id, ChatNotification::FinishStreaming).send();
+      let answer = cloud_service
+        .save_answer(
+          &workspace_id,
+          &chat_id,
+          &stream_buffer.lock().await,
+          question_id,
+        )
+        .await?;
+      Self::save_answer(uid, &chat_id, &user_service, answer)?;
+
       Ok::<(), FlowyError>(())
     });
 
@@ -306,7 +301,7 @@ impl Chat {
     );
     let workspace_id = self.user_service.workspace_id()?;
     let chat_id = self.chat_id.clone();
-    let cloud_service = self.cloud_service.clone();
+    let cloud_service = self.chat_service.clone();
     let user_service = self.user_service.clone();
     let uid = self.uid;
     let prev_message_state = self.prev_message_state.clone();
@@ -375,7 +370,7 @@ impl Chat {
   ) -> Result<RepeatedRelatedQuestionPB, FlowyError> {
     let workspace_id = self.user_service.workspace_id()?;
     let resp = self
-      .cloud_service
+      .chat_service
       .get_related_message(&workspace_id, &self.chat_id, message_id)
       .await?;
 
@@ -397,7 +392,7 @@ impl Chat {
     );
     let workspace_id = self.user_service.workspace_id()?;
     let answer = self
-      .cloud_service
+      .chat_service
       .generate_answer(&workspace_id, &self.chat_id, question_message_id)
       .await?;
 

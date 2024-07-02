@@ -1,29 +1,38 @@
+use chrono::{Duration, NaiveDateTime, Utc};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
 use collab_entity::{CollabObject, CollabType};
 use collab_integrate::CollabKVDB;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, instrument, trace, warn};
 
 use flowy_error::{ErrorCode, FlowyError, FlowyResult};
 use flowy_folder_pub::entities::{AppFlowyData, ImportData};
 use flowy_sqlite::schema::user_workspace_table;
 use flowy_sqlite::{query_dsl::*, DBConnection, ExpressionMethods};
 use flowy_user_pub::entities::{
-  Role, UserWorkspace, WorkspaceInvitation, WorkspaceInvitationStatus, WorkspaceMember,
+  Role, UpdateUserProfileParams, UserWorkspace, WorkspaceInvitation, WorkspaceInvitationStatus,
+  WorkspaceMember, WorkspaceSubscription, WorkspaceUsage,
 };
 use lib_dispatch::prelude::af_spawn;
 
-use crate::entities::{RepeatedUserWorkspacePB, ResetWorkspacePB, UserWorkspacePB};
+use crate::entities::{
+  RepeatedUserWorkspacePB, ResetWorkspacePB, SubscribeWorkspacePB, UpdateUserWorkspaceSettingPB,
+  UseAISettingPB, UserWorkspacePB,
+};
 use crate::migrations::AnonUser;
 use crate::notification::{send_notification, UserNotification};
 use crate::services::data_import::{
   generate_import_data, upload_collab_objects_data, ImportedFolder, ImportedSource,
 };
+use crate::services::sqlite_sql::member_sql::{
+  select_workspace_member, upsert_workspace_member, WorkspaceMemberTable,
+};
+use crate::services::sqlite_sql::user_sql::UserTableChangeset;
 use crate::services::sqlite_sql::workspace_sql::{
   get_all_user_workspace_op, get_user_workspace_op, insert_new_workspaces_op, UserWorkspaceTable,
 };
-use crate::user_manager::UserManager;
+use crate::user_manager::{upsert_user_profile_change, UserManager};
 use flowy_user_pub::session::Session;
 
 impl UserManager {
@@ -320,20 +329,6 @@ impl UserManager {
     Ok(())
   }
 
-  // deprecated, use invite instead
-  pub async fn add_workspace_member(
-    &self,
-    user_email: String,
-    workspace_id: String,
-  ) -> FlowyResult<()> {
-    self
-      .cloud_services
-      .get_user_service()?
-      .add_workspace_member(user_email, workspace_id)
-      .await?;
-    Ok(())
-  }
-
   pub async fn remove_workspace_member(
     &self,
     user_email: String,
@@ -357,6 +352,19 @@ impl UserManager {
       .get_workspace_members(workspace_id)
       .await?;
     Ok(members)
+  }
+
+  pub async fn get_workspace_member(
+    &self,
+    workspace_id: String,
+    uid: i64,
+  ) -> FlowyResult<WorkspaceMember> {
+    let member = self
+      .cloud_services
+      .get_user_service()?
+      .get_workspace_member(workspace_id, uid)
+      .await?;
+    Ok(member)
   }
 
   pub async fn update_workspace_member(
@@ -416,6 +424,162 @@ impl UserManager {
       .reset_workspace(collab_object)
       .await?;
     Ok(())
+  }
+
+  #[instrument(level = "info", skip(self), err)]
+  pub async fn subscribe_workspace(
+    &self,
+    workspace_subscription: SubscribeWorkspacePB,
+  ) -> FlowyResult<String> {
+    let payment_link = self
+      .cloud_services
+      .get_user_service()?
+      .subscribe_workspace(
+        workspace_subscription.workspace_id,
+        workspace_subscription.recurring_interval.into(),
+        workspace_subscription.workspace_subscription_plan.into(),
+        workspace_subscription.success_url,
+      )
+      .await?;
+
+    Ok(payment_link)
+  }
+
+  #[instrument(level = "info", skip(self), err)]
+  pub async fn get_workspace_subscriptions(&self) -> FlowyResult<Vec<WorkspaceSubscription>> {
+    let res = self
+      .cloud_services
+      .get_user_service()?
+      .get_workspace_subscriptions()
+      .await?;
+    Ok(res)
+  }
+
+  #[instrument(level = "info", skip(self), err)]
+  pub async fn cancel_workspace_subscription(&self, workspace_id: String) -> FlowyResult<()> {
+    self
+      .cloud_services
+      .get_user_service()?
+      .cancel_workspace_subscription(workspace_id)
+      .await?;
+    Ok(())
+  }
+
+  #[instrument(level = "info", skip(self), err)]
+  pub async fn get_workspace_usage(&self, workspace_id: String) -> FlowyResult<WorkspaceUsage> {
+    let workspace_usage = self
+      .cloud_services
+      .get_user_service()?
+      .get_workspace_usage(workspace_id)
+      .await?;
+    Ok(workspace_usage)
+  }
+
+  #[instrument(level = "info", skip(self), err)]
+  pub async fn get_billing_portal_url(&self) -> FlowyResult<String> {
+    let url = self
+      .cloud_services
+      .get_user_service()?
+      .get_billing_portal_url()
+      .await?;
+    Ok(url)
+  }
+
+  pub async fn update_workspace_setting(
+    &self,
+    updated_settings: UpdateUserWorkspaceSettingPB,
+  ) -> FlowyResult<()> {
+    let ai_model = updated_settings
+      .ai_model
+      .as_ref()
+      .map(|model| model.to_str().to_string());
+    let workspace_id = updated_settings.workspace_id.clone();
+    let cloud_service = self.cloud_services.get_user_service()?;
+    let settings = cloud_service
+      .update_workspace_setting(&workspace_id, updated_settings.into())
+      .await?;
+
+    let pb = UseAISettingPB::from(settings);
+    let uid = self.user_id()?;
+    send_notification(&uid.to_string(), UserNotification::DidUpdateAISetting)
+      .payload(pb)
+      .send();
+
+    if let Some(ai_model) = ai_model {
+      if let Err(err) = self.cloud_services.set_ai_model(&ai_model) {
+        error!("Set ai model failed: {}", err);
+      }
+
+      let conn = self.db_connection(uid)?;
+      let params = UpdateUserProfileParams::new(uid).with_ai_model(&ai_model);
+      upsert_user_profile_change(uid, conn, UserTableChangeset::new(params))?;
+    }
+    Ok(())
+  }
+
+  pub async fn get_workspace_settings(&self, workspace_id: &str) -> FlowyResult<UseAISettingPB> {
+    let cloud_service = self.cloud_services.get_user_service()?;
+    let settings = cloud_service.get_workspace_setting(workspace_id).await?;
+
+    let uid = self.user_id()?;
+    let conn = self.db_connection(uid)?;
+    let params = UpdateUserProfileParams::new(uid).with_ai_model(&settings.ai_model);
+    upsert_user_profile_change(uid, conn, UserTableChangeset::new(params))?;
+    Ok(UseAISettingPB::from(settings))
+  }
+
+  #[instrument(level = "debug", skip(self), err)]
+  pub async fn get_workspace_member_info(&self, uid: i64) -> FlowyResult<WorkspaceMember> {
+    let workspace_id = self.get_session()?.user_workspace.id.clone();
+    let db = self.authenticate_user.get_sqlite_connection(uid)?;
+    // Can opt in using memory cache
+    if let Ok(member_record) = select_workspace_member(db, &workspace_id, uid) {
+      if is_older_than_n_minutes(member_record.updated_at, 10) {
+        self
+          .get_workspace_member_info_from_remote(&workspace_id, uid)
+          .await?;
+      }
+
+      return Ok(WorkspaceMember {
+        email: member_record.email,
+        role: member_record.role.into(),
+        name: member_record.name,
+        avatar_url: member_record.avatar_url,
+      });
+    }
+
+    let member = self
+      .get_workspace_member_info_from_remote(&workspace_id, uid)
+      .await?;
+
+    Ok(member)
+  }
+
+  async fn get_workspace_member_info_from_remote(
+    &self,
+    workspace_id: &str,
+    uid: i64,
+  ) -> FlowyResult<WorkspaceMember> {
+    trace!("get workspace member info from remote: {}", workspace_id);
+    let member = self
+      .cloud_services
+      .get_user_service()?
+      .get_workspace_member_info(workspace_id, uid)
+      .await?;
+
+    let record = WorkspaceMemberTable {
+      email: member.email.clone(),
+      role: member.role.clone().into(),
+      name: member.name.clone(),
+      avatar_url: member.avatar_url.clone(),
+      uid,
+      workspace_id: workspace_id.to_string(),
+      updated_at: Utc::now().naive_utc(),
+    };
+
+    let db = self.authenticate_user.get_sqlite_connection(uid)?;
+    upsert_workspace_member(db, record)?;
+    Ok(member)
   }
 }
 
@@ -525,4 +689,12 @@ pub fn delete_user_workspaces(mut conn: DBConnection, workspace_id: &str) -> Flo
     warn!("expected to delete 1 row, but deleted {} rows", n);
   }
   Ok(())
+}
+
+fn is_older_than_n_minutes(updated_at: NaiveDateTime, minutes: i64) -> bool {
+  let current_time: NaiveDateTime = Utc::now().naive_utc();
+  match current_time.checked_sub_signed(Duration::minutes(minutes)) {
+    Some(five_minutes_ago) => updated_at < five_minutes_ago,
+    None => false,
+  }
 }

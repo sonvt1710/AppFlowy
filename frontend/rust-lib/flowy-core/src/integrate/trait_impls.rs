@@ -1,9 +1,10 @@
-use flowy_storage::{ObjectIdentity, ObjectStorageService};
+use client_api::entity::search_dto::SearchDocumentResponseItem;
+use flowy_search_pub::cloud::SearchCloudService;
 use std::sync::Arc;
 
 use anyhow::Error;
 use client_api::collab_sync::{SinkConfig, SyncObject, SyncPlugin};
-use client_api::entity::ai_dto::RepeatedRelatedQuestion;
+use client_api::entity::ai_dto::{CompletionType, RepeatedRelatedQuestion};
 use client_api::entity::ChatMessageType;
 use collab::core::origin::{CollabClient, CollabOrigin};
 
@@ -11,14 +12,13 @@ use collab::preclude::CollabPlugin;
 use collab_entity::CollabType;
 use collab_plugins::cloud_storage::postgres::SupabaseDBPlugin;
 use tokio_stream::wrappers::WatchStream;
-use tracing::debug;
+use tracing::{debug, info};
 
 use collab_integrate::collab_builder::{
   CollabCloudPluginProvider, CollabPluginProviderContext, CollabPluginProviderType,
 };
 use flowy_chat_pub::cloud::{
-  ChatCloudService, ChatMessage, ChatMessageStream, MessageCursor, RepeatedChatMessage,
-  StreamAnswer,
+  ChatCloudService, ChatMessage, MessageCursor, RepeatedChatMessage, StreamAnswer, StreamComplete,
 };
 use flowy_database_pub::cloud::{
   CollabDocStateByOid, DatabaseCloudService, DatabaseSnapshot, SummaryRowContent,
@@ -26,13 +26,14 @@ use flowy_database_pub::cloud::{
 };
 use flowy_document::deps::DocumentData;
 use flowy_document_pub::cloud::{DocumentCloudService, DocumentSnapshot};
-use flowy_error::FlowyError;
+use flowy_error::{FlowyError, FlowyResult};
 use flowy_folder_pub::cloud::{
   FolderCloudService, FolderCollabParams, FolderData, FolderSnapshot, Workspace, WorkspaceRecord,
 };
 use flowy_server_pub::af_cloud_config::AFCloudConfiguration;
 use flowy_server_pub::supabase_config::SupabaseConfiguration;
-use flowy_storage::ObjectValue;
+use flowy_storage_pub::cloud::{ObjectIdentity, ObjectValue, StorageCloudService};
+use flowy_storage_pub::storage::{CompletedPartRequest, CreateUploadResponse, UploadPartResponse};
 use flowy_user_pub::cloud::{UserCloudService, UserCloudServiceProvider};
 use flowy_user_pub::entities::{Authenticator, UserTokenState};
 use lib_infra::async_trait::async_trait;
@@ -40,7 +41,8 @@ use lib_infra::future::FutureResult;
 
 use crate::integrate::server::{Server, ServerProvider};
 
-impl ObjectStorageService for ServerProvider {
+#[async_trait]
+impl StorageCloudService for ServerProvider {
   fn get_object_url(&self, object_id: ObjectIdentity) -> FutureResult<String, FlowyError> {
     let server = self.get_server();
     FutureResult::new(async move {
@@ -57,20 +59,84 @@ impl ObjectStorageService for ServerProvider {
     })
   }
 
-  fn delete_object(&self, url: String) -> FutureResult<(), FlowyError> {
+  fn delete_object(&self, url: &str) -> FutureResult<(), FlowyError> {
     let server = self.get_server();
+    let url = url.to_string();
     FutureResult::new(async move {
       let storage = server?.file_storage().ok_or(FlowyError::internal())?;
-      storage.delete_object(url).await
+      storage.delete_object(&url).await
     })
   }
 
-  fn get_object(&self, url: String) -> FutureResult<flowy_storage::ObjectValue, FlowyError> {
+  fn get_object(&self, url: String) -> FutureResult<ObjectValue, FlowyError> {
     let server = self.get_server();
     FutureResult::new(async move {
       let storage = server?.file_storage().ok_or(FlowyError::internal())?;
       storage.get_object(url).await
     })
+  }
+
+  fn get_object_url_v1(
+    &self,
+    workspace_id: &str,
+    parent_dir: &str,
+    file_id: &str,
+  ) -> FlowyResult<String> {
+    let server = self.get_server()?;
+    let storage = server.file_storage().ok_or(FlowyError::internal())?;
+    storage.get_object_url_v1(workspace_id, parent_dir, file_id)
+  }
+
+  async fn create_upload(
+    &self,
+    workspace_id: &str,
+    parent_dir: &str,
+    file_id: &str,
+    content_type: &str,
+  ) -> Result<CreateUploadResponse, FlowyError> {
+    let server = self.get_server();
+    let storage = server?.file_storage().ok_or(FlowyError::internal())?;
+    storage
+      .create_upload(workspace_id, parent_dir, file_id, content_type)
+      .await
+  }
+
+  async fn upload_part(
+    &self,
+    workspace_id: &str,
+    parent_dir: &str,
+    upload_id: &str,
+    file_id: &str,
+    part_number: i32,
+    body: Vec<u8>,
+  ) -> Result<UploadPartResponse, FlowyError> {
+    let server = self.get_server();
+    let storage = server?.file_storage().ok_or(FlowyError::internal())?;
+    storage
+      .upload_part(
+        workspace_id,
+        parent_dir,
+        upload_id,
+        file_id,
+        part_number,
+        body,
+      )
+      .await
+  }
+
+  async fn complete_upload(
+    &self,
+    workspace_id: &str,
+    parent_dir: &str,
+    upload_id: &str,
+    file_id: &str,
+    parts: Vec<CompletedPartRequest>,
+  ) -> Result<(), FlowyError> {
+    let server = self.get_server();
+    let storage = server?.file_storage().ok_or(FlowyError::internal())?;
+    storage
+      .complete_upload(workspace_id, parent_dir, upload_id, file_id, parts)
+      .await
   }
 }
 
@@ -78,6 +144,13 @@ impl UserCloudServiceProvider for ServerProvider {
   fn set_token(&self, token: &str) -> Result<(), FlowyError> {
     let server = self.get_server()?;
     server.set_token(token)?;
+    Ok(())
+  }
+
+  fn set_ai_model(&self, ai_model: &str) -> Result<(), FlowyError> {
+    info!("Set AI model: {}", ai_model);
+    let server = self.get_server()?;
+    server.set_ai_model(ai_model)?;
     Ok(())
   }
 
@@ -478,24 +551,7 @@ impl ChatCloudService for ServerProvider {
     })
   }
 
-  async fn send_chat_message(
-    &self,
-    workspace_id: &str,
-    chat_id: &str,
-    message: &str,
-    message_type: ChatMessageType,
-  ) -> Result<ChatMessageStream, FlowyError> {
-    let workspace_id = workspace_id.to_string();
-    let chat_id = chat_id.to_string();
-    let message = message.to_string();
-    let server = self.get_server()?;
-    server
-      .chat_service()
-      .send_chat_message(&workspace_id, &chat_id, &message, message_type)
-      .await
-  }
-
-  fn send_question(
+  fn save_question(
     &self,
     workspace_id: &str,
     chat_id: &str,
@@ -510,7 +566,7 @@ impl ChatCloudService for ServerProvider {
     FutureResult::new(async move {
       server?
         .chat_service()
-        .send_question(&workspace_id, &chat_id, &message, message_type)
+        .save_question(&workspace_id, &chat_id, &message, message_type)
         .await
     })
   }
@@ -534,7 +590,7 @@ impl ChatCloudService for ServerProvider {
     })
   }
 
-  async fn stream_answer(
+  async fn ask_question(
     &self,
     workspace_id: &str,
     chat_id: &str,
@@ -545,7 +601,7 @@ impl ChatCloudService for ServerProvider {
     let server = self.get_server()?;
     server
       .chat_service()
-      .stream_answer(&workspace_id, &chat_id, message_id)
+      .ask_question(&workspace_id, &chat_id, message_id)
       .await
   }
 
@@ -584,20 +640,46 @@ impl ChatCloudService for ServerProvider {
     })
   }
 
-  fn generate_answer(
+  async fn generate_answer(
     &self,
     workspace_id: &str,
     chat_id: &str,
     question_message_id: i64,
-  ) -> FutureResult<ChatMessage, FlowyError> {
-    let workspace_id = workspace_id.to_string();
-    let chat_id = chat_id.to_string();
+  ) -> Result<ChatMessage, FlowyError> {
     let server = self.get_server();
-    FutureResult::new(async move {
-      server?
-        .chat_service()
-        .generate_answer(&workspace_id, &chat_id, question_message_id)
-        .await
-    })
+    server?
+      .chat_service()
+      .generate_answer(workspace_id, chat_id, question_message_id)
+      .await
+  }
+
+  async fn stream_complete(
+    &self,
+    workspace_id: &str,
+    text: &str,
+    complete_type: CompletionType,
+  ) -> Result<StreamComplete, FlowyError> {
+    let workspace_id = workspace_id.to_string();
+    let text = text.to_string();
+    let server = self.get_server()?;
+    server
+      .chat_service()
+      .stream_complete(&workspace_id, &text, complete_type)
+      .await
+  }
+}
+
+#[async_trait]
+impl SearchCloudService for ServerProvider {
+  async fn document_search(
+    &self,
+    workspace_id: &str,
+    query: String,
+  ) -> Result<Vec<SearchDocumentResponseItem>, FlowyError> {
+    let server = self.get_server()?;
+    match server.search_service() {
+      Some(search_service) => search_service.document_search(workspace_id, query).await,
+      None => Err(FlowyError::internal().with_context("SearchCloudService not found")),
+    }
   }
 }

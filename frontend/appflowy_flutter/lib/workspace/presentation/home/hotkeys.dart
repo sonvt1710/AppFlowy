@@ -17,6 +17,8 @@ import 'package:scaled_app/scaled_app.dart';
 
 typedef KeyDownHandler = void Function(HotKey hotKey);
 
+ValueNotifier<int> switchToTheNextSpace = ValueNotifier(0);
+
 /// Helper class that utilizes the global [HotKeyManager] to easily
 /// add a [HotKey] with different handlers.
 ///
@@ -135,13 +137,18 @@ class _HomeHotKeysState extends State<HomeHotKeys> {
     ),
 
     // Scale up/down the app
-    HotKeyItem(
-      hotKey: HotKey(
-        KeyCode.equal,
-        modifiers: [Platform.isMacOS ? KeyModifier.meta : KeyModifier.control],
-        scope: HotKeyScope.inapp,
+    // In some keyboards, the system returns equal as + keycode, while others may return add as + keycode, so add them both as zoom in key.
+    ...[KeyCode.equal, KeyCode.add].map(
+      (keycode) => HotKeyItem(
+        hotKey: HotKey(
+          keycode,
+          modifiers: [
+            Platform.isMacOS ? KeyModifier.meta : KeyModifier.control,
+          ],
+          scope: HotKeyScope.inapp,
+        ),
+        keyDownHandler: (_) => _scaleWithStep(0.1),
       ),
-      keyDownHandler: (_) => _scaleWithStep(0.1),
     ),
 
     HotKeyItem(
@@ -163,6 +170,16 @@ class _HomeHotKeysState extends State<HomeHotKeys> {
       keyDownHandler: (_) => _scaleToSize(1),
     ),
 
+    // Switch to the next space
+    HotKeyItem(
+      hotKey: HotKey(
+        KeyCode.keyO,
+        modifiers: [Platform.isMacOS ? KeyModifier.meta : KeyModifier.control],
+        scope: HotKeyScope.inapp,
+      ),
+      keyDownHandler: (_) => switchToTheNextSpace.value++,
+    ),
+
     // Open settings dialog
     openSettingsHotKey(context, widget.userProfile),
   ];
@@ -170,14 +187,12 @@ class _HomeHotKeysState extends State<HomeHotKeys> {
   @override
   void initState() {
     super.initState();
-
     _registerHotKeys(context);
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-
     _registerHotKeys(context);
   }
 

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use collab::core::collab::{DataSource, MutexCollab};
-use collab_database::database::DatabaseData;
+use collab_database::database::{DatabaseData, MutexDatabase};
 use collab_database::error::DatabaseError;
 use collab_database::rows::RowId;
 use collab_database::views::{CreateDatabaseParams, CreateViewParams, DatabaseLayout};
@@ -309,10 +309,13 @@ impl DatabaseManager {
     Ok(())
   }
 
-  pub async fn create_database_with_params(&self, params: CreateDatabaseParams) -> FlowyResult<()> {
+  pub async fn create_database_with_params(
+    &self,
+    params: CreateDatabaseParams,
+  ) -> FlowyResult<Arc<MutexDatabase>> {
     let wdb = self.get_database_indexer().await?;
-    let _ = wdb.create_database(params)?;
-    Ok(())
+    let database = wdb.create_database(params)?;
+    Ok(database)
   }
 
   /// A linked view is a view that is linked to existing database.
@@ -323,17 +326,22 @@ impl DatabaseManager {
     layout: DatabaseLayout,
     database_id: String,
     database_view_id: String,
+    database_parent_view_id: String,
   ) -> FlowyResult<()> {
     let wdb = self.get_database_indexer().await?;
     let mut params = CreateViewParams::new(database_id.clone(), database_view_id, name, layout);
     if let Some(database) = wdb.get_database(&database_id).await {
-      let (field, layout_setting) = DatabaseLayoutDepsResolver::new(database, layout)
-        .resolve_deps_when_create_database_linked_view();
+      let (field, layout_setting, field_settings_map) =
+        DatabaseLayoutDepsResolver::new(database, layout)
+          .resolve_deps_when_create_database_linked_view(&database_parent_view_id);
       if let Some(field) = field {
         params = params.with_deps_fields(vec![field], vec![default_field_settings_by_layout_map()]);
       }
       if let Some(layout_setting) = layout_setting {
         params = params.with_layout_setting(layout_setting);
+      }
+      if let Some(field_settings_map) = field_settings_map {
+        params = params.with_field_settings_map(field_settings_map);
       }
     };
     wdb.create_database_linked_view(params).await?;
@@ -357,11 +365,19 @@ impl DatabaseManager {
       return Err(FlowyError::internal().with_context("The number of rows exceeds the limit"));
     }
 
+    let view_id = params.inline_view_id.clone();
+    let database_id = params.database_id.clone();
+    let database = self.create_database_with_params(params).await?;
+    let encoded_collab = database
+      .lock()
+      .get_collab()
+      .lock()
+      .encode_collab_v1(|collab| CollabType::Database.validate_require_data(collab))?;
     let result = ImportResult {
-      database_id: params.database_id.clone(),
-      view_id: params.inline_view_id.clone(),
+      database_id,
+      view_id,
+      encoded_collab,
     };
-    self.create_database_with_params(params).await?;
     Ok(result)
   }
 
@@ -428,8 +444,6 @@ impl DatabaseManager {
     field_id: String,
   ) -> FlowyResult<()> {
     let database = self.get_database_with_view_id(&view_id).await?;
-
-    //
     let mut summary_row_content = SummaryRowContent::new();
     if let Some(row) = database.get_row(&view_id, &row_id) {
       let fields = database.get_fields(&view_id, None);
@@ -437,6 +451,9 @@ impl DatabaseManager {
         // When summarizing a row, skip the content in the "AI summary" cell; it does not need to
         // be summarized.
         if field.id != field_id {
+          if FieldType::from(field.field_type).is_ai_field() {
+            continue;
+          }
           if let Some(cell) = row.cells.get(&field.id) {
             summary_row_content.insert(field.name.clone(), stringify_cell(cell, &field));
           }
@@ -480,6 +497,10 @@ impl DatabaseManager {
         // When translate a row, skip the content in the "AI Translate" cell; it does not need to
         // be translated.
         if field.id != field_id {
+          if FieldType::from(field.field_type).is_ai_field() {
+            continue;
+          }
+
           if let Some(cell) = row.cells.get(&field.id) {
             translate_row_content.push(TranslateItem {
               title: field.name.clone(),
@@ -518,8 +539,8 @@ impl DatabaseManager {
       .into_iter()
       .map(|value| {
         value
-          .into_iter()
-          .map(|(_k, v)| v.to_string())
+          .into_values()
+          .map(|v| v.to_string())
           .collect::<Vec<String>>()
           .join(", ")
       })

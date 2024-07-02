@@ -420,15 +420,15 @@ pub(crate) async fn upload_file_handler(
   params: AFPluginData<UploadFileParamsPB>,
   manager: AFPluginState<Weak<DocumentManager>>,
 ) -> DataResult<UploadedFilePB, FlowyError> {
-  let AFPluginData(UploadFileParamsPB {
+  let UploadFileParamsPB {
     workspace_id,
+    document_id,
     local_file_path,
-    is_async,
-  }) = params;
+  } = params.try_into_inner()?;
 
   let manager = upgrade_document(manager)?;
   let url = manager
-    .upload_file(workspace_id, &local_file_path, is_async)
+    .upload_file(workspace_id, &document_id, &local_file_path)
     .await?;
 
   Ok(AFPluginData(UploadedFilePB {
@@ -442,10 +442,10 @@ pub(crate) async fn download_file_handler(
   params: AFPluginData<UploadedFilePB>,
   manager: AFPluginState<Weak<DocumentManager>>,
 ) -> FlowyResult<()> {
-  let AFPluginData(UploadedFilePB {
+  let UploadedFilePB {
     url,
     local_file_path,
-  }) = params;
+  } = params.try_into_inner()?;
 
   let manager = upgrade_document(manager)?;
   manager.download_file(local_file_path, url).await
@@ -456,10 +456,10 @@ pub(crate) async fn delete_file_handler(
   params: AFPluginData<UploadedFilePB>,
   manager: AFPluginState<Weak<DocumentManager>>,
 ) -> FlowyResult<()> {
-  let AFPluginData(UploadedFilePB {
+  let UploadedFilePB {
     url,
     local_file_path,
-  }) = params;
+  } = params.try_into_inner()?;
   let manager = upgrade_document(manager)?;
   manager.delete_file(local_file_path, url).await
 }

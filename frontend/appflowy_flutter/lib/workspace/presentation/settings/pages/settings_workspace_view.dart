@@ -1,5 +1,6 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'package:appflowy/generated/flowy_svgs.g.dart';
 import 'package:appflowy/generated/locale_keys.g.dart';
@@ -23,6 +24,7 @@ import 'package:appflowy/workspace/presentation/settings/shared/setting_list_til
 import 'package:appflowy/workspace/presentation/settings/shared/settings_alert_dialog.dart';
 import 'package:appflowy/workspace/presentation/settings/shared/settings_body.dart';
 import 'package:appflowy/workspace/presentation/settings/shared/settings_category.dart';
+import 'package:appflowy/workspace/presentation/settings/shared/settings_category_spacer.dart';
 import 'package:appflowy/workspace/presentation/settings/shared/settings_dashed_divider.dart';
 import 'package:appflowy/workspace/presentation/settings/shared/settings_dropdown.dart';
 import 'package:appflowy/workspace/presentation/settings/shared/settings_input_field.dart';
@@ -30,7 +32,6 @@ import 'package:appflowy/workspace/presentation/settings/shared/settings_radio_s
 import 'package:appflowy/workspace/presentation/settings/shared/single_setting_action.dart';
 import 'package:appflowy/workspace/presentation/settings/widgets/theme_upload/theme_upload_view.dart';
 import 'package:appflowy/workspace/presentation/widgets/toggle/toggle.dart';
-import 'package:appflowy/workspace/presentation/widgets/toggle/toggle_style.dart';
 import 'package:appflowy_backend/protobuf/flowy-user/protobuf.dart';
 import 'package:appflowy_popover/appflowy_popover.dart';
 import 'package:easy_localization/easy_localization.dart';
@@ -44,14 +45,18 @@ import 'package:flowy_infra/theme_extension.dart';
 import 'package:flowy_infra_ui/flowy_infra_ui.dart';
 import 'package:flowy_infra_ui/style_widget/hover.dart';
 import 'package:flowy_infra_ui/widget/dialog/styled_dialogs.dart';
-import 'package:flowy_infra_ui/widget/flowy_tooltip.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class SettingsWorkspaceView extends StatelessWidget {
-  const SettingsWorkspaceView({super.key, required this.userProfile});
+  const SettingsWorkspaceView({
+    super.key,
+    required this.userProfile,
+    this.workspaceMember,
+  });
 
   final UserProfilePB userProfile;
+  final WorkspaceMemberPB? workspaceMember;
 
   @override
   Widget build(BuildContext context) {
@@ -81,14 +86,16 @@ class SettingsWorkspaceView extends StatelessWidget {
           return SettingsBody(
             title: LocaleKeys.settings_workspacePage_title.tr(),
             description: LocaleKeys.settings_workspacePage_description.tr(),
+            autoSeparate: false,
             children: [
               // We don't allow changing workspace name/icon for local/offline
               if (userProfile.authenticator != AuthenticatorPB.Local) ...[
                 SettingsCategory(
                   title: LocaleKeys.settings_workspacePage_workspaceName_title
                       .tr(),
-                  children: const [_WorkspaceNameSetting()],
+                  children: [_WorkspaceNameSetting(member: workspaceMember)],
                 ),
+                const SettingsCategorySpacer(),
                 SettingsCategory(
                   title: LocaleKeys.settings_workspacePage_workspaceIcon_title
                       .tr(),
@@ -97,45 +104,59 @@ class SettingsWorkspaceView extends StatelessWidget {
                       .tr(),
                   children: [
                     _WorkspaceIconSetting(
-                      enableEdit: state.myRole.isOwner,
+                      enableEdit: workspaceMember?.role.isOwner ?? false,
                       workspace: state.workspace,
                     ),
                   ],
                 ),
+                const SettingsCategorySpacer(),
               ],
               SettingsCategory(
                 title: LocaleKeys.settings_workspacePage_appearance_title.tr(),
                 children: const [AppearanceSelector()],
               ),
+              const VSpace(16),
+              // const SettingsCategorySpacer(),
               SettingsCategory(
                 title: LocaleKeys.settings_workspacePage_theme_title.tr(),
                 description:
                     LocaleKeys.settings_workspacePage_theme_description.tr(),
                 children: const [
                   _ThemeDropdown(),
-                  SettingsDashedDivider(),
                   _DocumentCursorColorSetting(),
                   _DocumentSelectionColorSetting(),
                 ],
               ),
+              const SettingsCategorySpacer(),
               SettingsCategory(
                 title:
                     LocaleKeys.settings_workspacePage_workspaceFont_title.tr(),
-                children: const [_FontSelectorDropdown()],
-              ),
-              SettingsCategory(
-                title:
-                    LocaleKeys.settings_workspacePage_textDirection_title.tr(),
-                children: const [
-                  TextDirectionSelect(),
-                  EnableRTLItemsSwitcher(),
+                children: [
+                  _FontSelectorDropdown(
+                    currentFont:
+                        context.read<AppearanceSettingsCubit>().state.font,
+                  ),
+                  SettingsDashedDivider(
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                  SettingsCategory(
+                    title: LocaleKeys.settings_workspacePage_textDirection_title
+                        .tr(),
+                    children: const [
+                      TextDirectionSelect(),
+                      EnableRTLItemsSwitcher(),
+                    ],
+                  ),
                 ],
               ),
+              const VSpace(16),
               SettingsCategory(
                 title: LocaleKeys.settings_workspacePage_layoutDirection_title
                     .tr(),
                 children: const [_LayoutDirectionSelect()],
               ),
+              const SettingsCategorySpacer(),
+
               SettingsCategory(
                 title: LocaleKeys.settings_workspacePage_dateTime_title.tr(),
                 children: [
@@ -147,10 +168,14 @@ class SettingsWorkspaceView extends StatelessWidget {
                   const _DateFormatDropdown(),
                 ],
               ),
+              const SettingsCategorySpacer(),
+
               SettingsCategory(
                 title: LocaleKeys.settings_workspacePage_language_title.tr(),
                 children: const [LanguageDropdown()],
               ),
+              const SettingsCategorySpacer(),
+
               if (userProfile.authenticator != AuthenticatorPB.Local) ...[
                 SingleSettingAction(
                   label: LocaleKeys.settings_workspacePage_manageWorkspace_title
@@ -158,14 +183,14 @@ class SettingsWorkspaceView extends StatelessWidget {
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                   onPressed: () => SettingsAlertDialog(
-                    title: state.myRole.isOwner
+                    title: workspaceMember?.role.isOwner ?? false
                         ? LocaleKeys
                             .settings_workspacePage_deleteWorkspacePrompt_title
                             .tr()
                         : LocaleKeys
                             .settings_workspacePage_leaveWorkspacePrompt_title
                             .tr(),
-                    subtitle: state.myRole.isOwner
+                    subtitle: workspaceMember?.role.isOwner ?? false
                         ? LocaleKeys
                             .settings_workspacePage_deleteWorkspacePrompt_content
                             .tr()
@@ -175,7 +200,7 @@ class SettingsWorkspaceView extends StatelessWidget {
                     isDangerous: true,
                     confirm: () {
                       context.read<WorkspaceSettingsBloc>().add(
-                            state.myRole.isOwner
+                            workspaceMember?.role.isOwner ?? false
                                 ? const WorkspaceSettingsEvent.deleteWorkspace()
                                 : const WorkspaceSettingsEvent.leaveWorkspace(),
                           );
@@ -183,7 +208,7 @@ class SettingsWorkspaceView extends StatelessWidget {
                     },
                   ).show(context),
                   isDangerous: true,
-                  buttonLabel: state.myRole.isOwner
+                  buttonLabel: workspaceMember?.role.isOwner ?? false
                       ? LocaleKeys
                           .settings_workspacePage_manageWorkspace_deleteWorkspace
                           .tr()
@@ -201,7 +226,9 @@ class SettingsWorkspaceView extends StatelessWidget {
 }
 
 class _WorkspaceNameSetting extends StatefulWidget {
-  const _WorkspaceNameSetting();
+  const _WorkspaceNameSetting({this.member});
+
+  final WorkspaceMemberPB? member;
 
   @override
   State<_WorkspaceNameSetting> createState() => _WorkspaceNameSettingState();
@@ -209,31 +236,8 @@ class _WorkspaceNameSetting extends StatefulWidget {
 
 class _WorkspaceNameSettingState extends State<_WorkspaceNameSetting> {
   final TextEditingController workspaceNameController = TextEditingController();
-  late final FocusNode focusNode;
-  bool isEditing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    focusNode = FocusNode(
-      onKeyEvent: (_, event) {
-        if (event is KeyDownEvent &&
-            event.logicalKey == LogicalKeyboardKey.escape &&
-            isEditing &&
-            mounted) {
-          setState(() => isEditing = false);
-          return KeyEventResult.handled;
-        }
-
-        return KeyEventResult.ignored;
-      },
-    )..addListener(() {
-        if (!focusNode.hasFocus && isEditing && mounted) {
-          _saveWorkspaceName(name: workspaceNameController.text);
-          setState(() => isEditing = false);
-        }
-      });
-  }
+  final focusNode = FocusNode();
+  Timer? _debounce;
 
   @override
   void dispose() {
@@ -252,69 +256,44 @@ class _WorkspaceNameSettingState extends State<_WorkspaceNameSetting> {
         }
       },
       builder: (_, state) {
-        if (isEditing) {
-          return Flexible(
-            child: SettingsInputField(
-              textController: workspaceNameController,
-              value: workspaceNameController.text,
-              focusNode: focusNode..requestFocus(),
-              onCancel: () => setState(() => isEditing = false),
-              onSave: (_) {
-                _saveWorkspaceName(name: workspaceNameController.text);
-                setState(() => isEditing = false);
-              },
+        if (widget.member == null || !widget.member!.role.isOwner) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2.5),
+            child: FlowyText.regular(
+              workspaceNameController.text,
+              fontSize: 14,
             ),
           );
         }
 
-        return Row(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2.5),
-              child: FlowyText.regular(
-                workspaceNameController.text,
-                fontSize: 14,
-              ),
-            ),
-            if (state.myRole.isOwner) ...[
-              const HSpace(4),
-              FlowyTooltip(
-                message: LocaleKeys
-                    .settings_workspacePage_workspaceName_editTooltip
-                    .tr(),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => setState(() => isEditing = true),
-                  child: const FlowyHover(
-                    resetHoverOnRebuild: false,
-                    child: Padding(
-                      padding: EdgeInsets.all(4),
-                      child: FlowySvg(FlowySvgs.edit_s),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ],
+        return Flexible(
+          child: SettingsInputField(
+            textController: workspaceNameController,
+            value: workspaceNameController.text,
+            focusNode: focusNode,
+            onSave: (_) =>
+                _saveWorkspaceName(name: workspaceNameController.text),
+            onChanged: _debounceSaveName,
+            hideActions: true,
+          ),
         );
       },
     );
   }
 
-  void _saveWorkspaceName({
-    required String name,
-  }) {
-    if (name.isNotEmpty) {
-      context.read<WorkspaceSettingsBloc>().add(
-            WorkspaceSettingsEvent.updateWorkspaceName(name),
-          );
+  void _debounceSaveName(String name) {
+    _debounce?.cancel();
+    _debounce = Timer(
+      const Duration(milliseconds: 300),
+      () => _saveWorkspaceName(name: name),
+    );
+  }
 
-      if (context.mounted) {
-        showSnackBarMessage(
-          context,
-          LocaleKeys.settings_workspacePage_workspaceName_savedMessage.tr(),
-        );
-      }
+  void _saveWorkspaceName({required String name}) {
+    if (name.isNotEmpty) {
+      context
+          .read<WorkspaceSettingsBloc>()
+          .add(WorkspaceSettingsEvent.updateWorkspaceName(name));
     }
   }
 }
@@ -453,7 +432,6 @@ class EnableRTLItemsSwitcher extends StatelessWidget {
         ),
         const HSpace(16),
         Toggle(
-          style: ToggleStyle.big,
           value: context
               .watch<AppearanceSettingsCubit>()
               .state
@@ -600,7 +578,6 @@ class _TimeFormatSwitcher extends StatelessWidget {
         ),
         const HSpace(16),
         Toggle(
-          style: ToggleStyle.big,
           value: context.watch<AppearanceSettingsCubit>().state.timeFormat ==
               UserTimeFormatPB.TwentyFourHour,
           onChanged: (value) =>
@@ -636,8 +613,10 @@ class _ThemeDropdown extends StatelessWidget {
             key: const Key('ThemeSelectorDropdown'),
             actions: [
               SettingAction(
-                tooltip: 'Upload a custom theme',
-                icon: const FlowySvg(FlowySvgs.folder_m, size: Size.square(16)),
+                tooltip: LocaleKeys
+                    .settings_workspacePage_theme_uploadCustomThemeTooltip
+                    .tr(),
+                icon: const FlowySvg(FlowySvgs.folder_m, size: Size.square(20)),
                 onPressed: () => Dialogs.show(
                   context,
                   child: BlocProvider<DynamicPluginBloc>.value(
@@ -658,7 +637,10 @@ class _ThemeDropdown extends StatelessWidget {
                 }),
               ),
               SettingAction(
-                icon: const FlowySvg(FlowySvgs.restore_s),
+                icon: const FlowySvg(
+                  FlowySvgs.restore_s,
+                  size: Size.square(20),
+                ),
                 label: LocaleKeys.settings_common_reset.tr(),
                 onPressed: () => context
                     .read<AppearanceSettingsCubit>()
@@ -840,7 +822,9 @@ class _SelectedModeIndicator extends StatelessWidget {
 }
 
 class _FontSelectorDropdown extends StatefulWidget {
-  const _FontSelectorDropdown();
+  const _FontSelectorDropdown({required this.currentFont});
+
+  final String currentFont;
 
   @override
   State<_FontSelectorDropdown> createState() => _FontSelectorDropdownState();
@@ -850,18 +834,23 @@ class _FontSelectorDropdownState extends State<_FontSelectorDropdown> {
   late final _options = [defaultFontFamily, ...GoogleFonts.asMap().keys];
   final _focusNode = FocusNode();
   final _controller = PopoverController();
-  final _scrollController = ScrollController();
+  late final ScrollController _scrollController;
+  final _textController = TextEditingController();
 
-  void _scrollIfNeccessary() {
+  @override
+  void initState() {
+    super.initState();
+    const itemExtent = 32;
+    final index = _options.indexOf(widget.currentFont);
+    final newPosition = (index * itemExtent).toDouble();
+    _scrollController = ScrollController(initialScrollOffset: newPosition);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Set scroll position to selected item.
-      final appearance = context.read<AppearanceSettingsCubit>().state;
-      const itemExtent = 32;
-      final index = _options.indexOf(appearance.font);
-      final newPosition = (index * itemExtent).toDouble();
-      if (_scrollController.offset != newPosition) {
-        _scrollController.jumpTo(newPosition);
-      }
+      _textController.text = context
+          .read<AppearanceSettingsCubit>()
+          .state
+          .font
+          .fontFamilyDisplayName;
     });
   }
 
@@ -870,6 +859,7 @@ class _FontSelectorDropdownState extends State<_FontSelectorDropdown> {
     _controller.close();
     _focusNode.dispose();
     _scrollController.dispose();
+    _textController.dispose();
     super.dispose();
   }
 
@@ -901,57 +891,14 @@ class _FontSelectorDropdownState extends State<_FontSelectorDropdown> {
             ),
           ],
         ),
-        popupBuilder: (_) {
-          _scrollIfNeccessary();
-          return Material(
-            type: MaterialType.transparency,
-            child: ListView.separated(
-              controller: _scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              itemCount: _options.length,
-              separatorBuilder: (_, __) => const VSpace(4),
-              itemBuilder: (context, index) {
-                final font = _options[index];
-                final isSelected = appearance.font == font;
-                return SizedBox(
-                  height: 28,
-                  child: ListTile(
-                    selected: isSelected,
-                    dense: true,
-                    hoverColor: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withOpacity(0.12),
-                    selectedTileColor:
-                        Theme.of(context).colorScheme.primary.withOpacity(0.12),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 6),
-                    minTileHeight: 28,
-                    onTap: () {
-                      context
-                          .read<AppearanceSettingsCubit>()
-                          .setFontFamily(font);
-
-                      // This is a workaround such that when dialog rebuilds due
-                      // to font changing, the font selector won't retain focus.
-                      _focusNode.parent?.requestFocus();
-
-                      _controller.close();
-                    },
-                    title: Text(
-                      font.fontFamilyDisplayName,
-                      style: TextStyle(
-                        color: AFThemeExtension.of(context).textColor,
-                        fontFamily: getGoogleFontSafely(font).fontFamily,
-                      ),
-                    ),
-                    trailing:
-                        isSelected ? const FlowySvg(FlowySvgs.check_s) : null,
-                  ),
-                );
-              },
-            ),
-          );
-        },
+        popupBuilder: (_) => _FontListPopup(
+          currentFont: appearance.font,
+          scrollController: _scrollController,
+          controller: _controller,
+          options: _options,
+          textController: _textController,
+          focusNode: _focusNode,
+        ),
         child: Row(
           children: [
             Expanded(
@@ -967,36 +914,43 @@ class _FontSelectorDropdownState extends State<_FontSelectorDropdown> {
                     setState(() {});
                     _controller.show();
                   },
-                  child: Focus(
+                  child: FlowyTextField(
+                    autoFocus: false,
                     focusNode: _focusNode,
-                    includeSemantics: false,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: _focusNode.hasFocus
-                              ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context).colorScheme.outline,
+                    controller: _textController,
+                    decoration: InputDecoration(
+                      suffixIcon: const MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: Icon(Icons.arrow_drop_down),
+                      ),
+                      counterText: '',
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 12,
+                        horizontal: 18,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(
+                          color: Theme.of(context).colorScheme.outline,
                         ),
                         borderRadius: Corners.s8Border,
                       ),
-                      child: Row(
-                        children: [
-                          const HSpace(18),
-                          Text(
-                            appearance.font.fontFamilyDisplayName,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyLarge
-                                ?.copyWith(fontFamily: appearance.font),
-                          ),
-                          const Spacer(),
-                          const MouseRegion(
-                            cursor: SystemMouseCursors.click,
-                            child: Icon(Icons.arrow_drop_down),
-                          ),
-                          const HSpace(10),
-                        ],
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        borderRadius: Corners.s8Border,
+                      ),
+                      errorBorder: OutlineInputBorder(
+                        borderSide: BorderSide(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                        borderRadius: Corners.s8Border,
+                      ),
+                      focusedErrorBorder: OutlineInputBorder(
+                        borderSide: BorderSide(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                        borderRadius: Corners.s8Border,
                       ),
                     ),
                   ),
@@ -1018,7 +972,10 @@ class _FontSelectorDropdownState extends State<_FontSelectorDropdown> {
                         const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                     child: Row(
                       children: [
-                        const FlowySvg(FlowySvgs.restore_s),
+                        const FlowySvg(
+                          FlowySvgs.restore_s,
+                          size: Size.square(20),
+                        ),
                         const HSpace(4),
                         FlowyText.regular(
                           LocaleKeys.settings_common_reset.tr(),
@@ -1031,6 +988,145 @@ class _FontSelectorDropdownState extends State<_FontSelectorDropdown> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _FontListPopup extends StatefulWidget {
+  const _FontListPopup({
+    required this.controller,
+    required this.scrollController,
+    required this.options,
+    required this.currentFont,
+    required this.textController,
+    required this.focusNode,
+  });
+
+  final ScrollController scrollController;
+  final List<String> options;
+  final String currentFont;
+  final TextEditingController textController;
+  final FocusNode focusNode;
+  final PopoverController controller;
+
+  @override
+  State<_FontListPopup> createState() => _FontListPopupState();
+}
+
+class _FontListPopupState extends State<_FontListPopup> {
+  late List<String> _filteredOptions = widget.options;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.textController.addListener(_onTextFieldChanged);
+  }
+
+  void _onTextFieldChanged() {
+    final value = widget.textController.text;
+
+    if (value.trim().isEmpty) {
+      _filteredOptions = widget.options;
+    } else {
+      if (value.fontFamilyDisplayName ==
+          widget.currentFont.fontFamilyDisplayName) {
+        return;
+      }
+
+      _filteredOptions = widget.options
+          .where(
+            (f) =>
+                f.toLowerCase().contains(value.trim().toLowerCase()) ||
+                f.fontFamilyDisplayName
+                    .toLowerCase()
+                    .contains(value.trim().fontFamilyDisplayName.toLowerCase()),
+          )
+          .toList();
+
+      // Default font family is "", but the display name is "System",
+      // which means it's hard compared to other font families to find this one.
+      if (!_filteredOptions.contains(defaultFontFamily) &&
+          'system'.contains(value.trim().toLowerCase())) {
+        _filteredOptions.insert(0, defaultFontFamily);
+      }
+    }
+
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.textController.removeListener(_onTextFieldChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      type: MaterialType.transparency,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_filteredOptions.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: FlowyText.medium(
+                LocaleKeys.settings_workspacePage_workspaceFont_noFontHint.tr(),
+              ),
+            ),
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: _filteredOptions.length < 10,
+              controller: widget.scrollController,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              itemCount: _filteredOptions.length,
+              separatorBuilder: (_, __) => const VSpace(4),
+              itemBuilder: (context, index) {
+                final font = _filteredOptions[index];
+                final isSelected = widget.currentFont == font;
+                return SizedBox(
+                  height: 28,
+                  child: ListTile(
+                    selected: isSelected,
+                    dense: true,
+                    hoverColor: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withOpacity(0.12),
+                    selectedTileColor:
+                        Theme.of(context).colorScheme.primary.withOpacity(0.12),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+                    minTileHeight: 28,
+                    onTap: () {
+                      context
+                          .read<AppearanceSettingsCubit>()
+                          .setFontFamily(font);
+
+                      widget.textController.text = font.fontFamilyDisplayName;
+
+                      // This is a workaround such that when dialog rebuilds due
+                      // to font changing, the font selector won't retain focus.
+                      widget.focusNode.parent?.requestFocus();
+
+                      widget.controller.close();
+                    },
+                    title: Text(
+                      font.fontFamilyDisplayName,
+                      style: TextStyle(
+                        color: AFThemeExtension.of(context).textColor,
+                        fontFamily: getGoogleFontSafely(font).fontFamily,
+                      ),
+                    ),
+                    trailing:
+                        isSelected ? const FlowySvg(FlowySvgs.check_s) : null,
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

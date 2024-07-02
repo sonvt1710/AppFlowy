@@ -58,7 +58,6 @@ class _SettingsAccountViewState extends State<SettingsAccountView> {
         builder: (context, state) {
           return SettingsBody(
             title: LocaleKeys.settings_accountPage_title.tr(),
-            description: LocaleKeys.settings_accountPage_description.tr(),
             children: [
               SettingsCategory(
                 title: LocaleKeys.settings_accountPage_general_title.tr(),
@@ -137,39 +136,7 @@ class _SettingsAccountViewState extends State<SettingsAccountView> {
               //     ),
               //   ],
               // ),
-              SettingsCategory(
-                title: LocaleKeys.settings_accountPage_keys_title.tr(),
-                children: [
-                  SettingsInputField(
-                    label:
-                        LocaleKeys.settings_accountPage_keys_openAILabel.tr(),
-                    tooltip:
-                        LocaleKeys.settings_accountPage_keys_openAITooltip.tr(),
-                    placeholder:
-                        LocaleKeys.settings_accountPage_keys_openAIHint.tr(),
-                    value: state.userProfile.openaiKey,
-                    obscureText: true,
-                    onSave: (key) => context
-                        .read<SettingsUserViewBloc>()
-                        .add(SettingsUserEvent.updateUserOpenAIKey(key)),
-                  ),
-                  SettingsInputField(
-                    label: LocaleKeys.settings_accountPage_keys_stabilityAILabel
-                        .tr(),
-                    tooltip: LocaleKeys
-                        .settings_accountPage_keys_stabilityAITooltip
-                        .tr(),
-                    placeholder: LocaleKeys
-                        .settings_accountPage_keys_stabilityAIHint
-                        .tr(),
-                    value: state.userProfile.stabilityAiKey,
-                    obscureText: true,
-                    onSave: (key) => context
-                        .read<SettingsUserViewBloc>()
-                        .add(SettingsUserEvent.updateUserStabilityAIKey(key)),
-                  ),
-                ],
-              ),
+
               SettingsCategory(
                 title: LocaleKeys.settings_accountPage_login_title.tr(),
                 children: [
@@ -436,7 +403,7 @@ class _UserProfileSettingState extends State<UserProfileSetting> {
                 iconUrl: widget.iconUrl,
                 name: widget.name,
                 size: 48,
-                fontSize: 24,
+                fontSize: 20,
                 isHovering: isHovering,
               ),
             ),
@@ -445,7 +412,7 @@ class _UserProfileSettingState extends State<UserProfileSetting> {
         const HSpace(16),
         if (!isEditing) ...[
           Padding(
-            padding: const EdgeInsets.only(top: 20),
+            padding: const EdgeInsets.only(top: 12),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [

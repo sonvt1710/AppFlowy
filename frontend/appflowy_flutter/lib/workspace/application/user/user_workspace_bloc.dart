@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'package:appflowy/generated/locale_keys.g.dart';
 import 'package:appflowy/shared/feature_flags.dart';
 import 'package:appflowy/user/application/user_listener.dart';
@@ -10,7 +12,6 @@ import 'package:appflowy_backend/protobuf/flowy-user/protobuf.dart';
 import 'package:appflowy_result/appflowy_result.dart';
 import 'package:collection/collection.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:protobuf/protobuf.dart';
@@ -28,9 +29,9 @@ class UserWorkspaceBloc extends Bloc<UserWorkspaceEvent, UserWorkspaceState> {
         await event.when(
           initial: () async {
             _listener.start(
-              didUpdateUserWorkspaces: (workspaces) =>
+              onUserWorkspaceListUpdated: (workspaces) =>
                   add(UserWorkspaceEvent.updateWorkspaces(workspaces)),
-              didUpdateUserWorkspace: (workspace) {
+              onUserWorkspaceUpdated: (workspace) {
                 // If currentWorkspace is updated, eg. Icon or Name, we should notify
                 // the UI to render the updated information.
                 final currentWorkspace = state.currentWorkspace;
@@ -54,6 +55,7 @@ class UserWorkspaceBloc extends Bloc<UserWorkspaceEvent, UserWorkspaceState> {
               Log.info('init open workspace: ${currentWorkspace.workspaceId}');
               await _userService.openWorkspace(currentWorkspace.workspaceId);
             }
+
             emit(
               state.copyWith(
                 currentWorkspace: currentWorkspace,
@@ -62,6 +64,13 @@ class UserWorkspaceBloc extends Bloc<UserWorkspaceEvent, UserWorkspaceState> {
                 actionResult: null,
               ),
             );
+
+            /// We wait with fetching the workspace member as it may take some time,
+            /// to avoid blocking the UI from rendering (the sidebar).
+            final workspaceMemberResult =
+                await _userService.getWorkspaceMember();
+            final workspaceMember = workspaceMemberResult.toNullable();
+            emit(state.copyWith(currentWorkspaceMember: workspaceMember));
           },
           fetchWorkspaces: () async {
             final result = await _fetchWorkspaces();
@@ -218,6 +227,14 @@ class UserWorkspaceBloc extends Bloc<UserWorkspaceEvent, UserWorkspaceState> {
                 ),
               ),
             );
+
+            /// We wait with fetching the workspace member as it may take some time,
+            /// to avoid blocking the UI from rendering (the sidebar).
+            final workspaceMemberResult =
+                await _userService.getWorkspaceMember();
+            final workspaceMember = workspaceMemberResult.toNullable();
+
+            emit(state.copyWith(currentWorkspaceMember: workspaceMember));
           },
           renameWorkspace: (workspaceId, name) async {
             final result =
@@ -386,7 +403,7 @@ class UserWorkspaceBloc extends Bloc<UserWorkspaceEvent, UserWorkspaceState> {
       )> _fetchWorkspaces() async {
     try {
       final currentWorkspace =
-          await _userService.getCurrentWorkspace().getOrThrow();
+          await UserBackendService.getCurrentWorkspace().getOrThrow();
       final workspaces = await _userService.getWorkspaces().getOrThrow();
       if (workspaces.isEmpty) {
         workspaces.add(convertWorkspacePBToUserWorkspace(currentWorkspace));
@@ -474,6 +491,7 @@ class UserWorkspaceState with _$UserWorkspaceState {
   const factory UserWorkspaceState({
     @Default(null) UserWorkspacePB? currentWorkspace,
     @Default([]) List<UserWorkspacePB> workspaces,
+    @Default(null) WorkspaceMemberPB? currentWorkspaceMember,
     @Default(null) UserWorkspaceActionResult? actionResult,
     @Default(false) bool isCollabWorkspaceOn,
   }) = _UserWorkspaceState;
@@ -491,6 +509,7 @@ class UserWorkspaceState with _$UserWorkspaceState {
     if (identical(this, other)) return true;
 
     return other is UserWorkspaceState &&
+        other.currentWorkspaceMember == currentWorkspaceMember &&
         other.currentWorkspace == currentWorkspace &&
         _deepCollectionEquality.equals(other.workspaces, workspaces) &&
         identical(other.actionResult, actionResult);

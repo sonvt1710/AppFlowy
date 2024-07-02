@@ -18,6 +18,13 @@ class KVKeys {
   ///   {'dx': 10.0, 'dy': 10.0}
   static const String windowPosition = 'windowPosition';
 
+  /// The key for saving the window status
+  ///
+  /// The value is a json string with the following format:
+  ///  { 'windowMaximized': true }
+  ///
+  static const String windowMaximized = 'windowMaximized';
+
   static const String kDocumentAppearanceFontSize =
       'kDocumentAppearanceFontSize';
   static const String kDocumentAppearanceFontFamily =
@@ -81,14 +88,24 @@ class KVKeys {
   /// The value is a double string.
   static const String scaleFactor = 'scaleFactor';
 
-  /// The key for saving the last opened space
+  /// The key for saving the last opened tab (favorite, recent, space etc.)
   ///
   /// The value is a int string.
   static const String lastOpenedSpace = 'lastOpenedSpace';
 
-  /// The key for saving the space order
+  /// The key for saving the space tab order
   ///
   /// The value is a json string with the following format:
   /// [0, 1, 2]
   static const String spaceOrder = 'spaceOrder';
+
+  /// The key for saving the last opened space id (space A, space B)
+  ///
+  /// The value is a string.
+  static const String lastOpenedSpaceId = 'lastOpenedSpaceId';
+
+  /// The key for saving the upgrade space tag
+  ///
+  /// The value is a boolean string
+  static const String hasUpgradedSpace = 'hasUpgradedSpace060';
 }
